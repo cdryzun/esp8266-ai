@@ -7,6 +7,11 @@
 <p align="center">桌上的一台 AI 状态小电脑 —— ESP8266 · 开源硬件 · 桌面伴侣</p>
 
 <p align="center">
+  中文 ·
+  <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   <a href="https://mac.qust.me">官网</a> ·
   <a href="https://mac.qust.me/#flash">网页刷机</a> ·
   <a href="https://github.com/pengchujin/esp8266-ai/releases/latest">下载</a>
@@ -56,7 +61,7 @@
   <img src="docs/images/working.jpg" width="640" alt="工作演示">
 </p>
 
-日常使用都在托盘图标上：**左键**打开设备画面的实时镜像，**右键**是完整菜单（额度详情、屏幕切换、更换桌宠、音乐/网速页等）。
+日常使用都在托盘图标上：**左键**打开设备画面的实时镜像（底部有屏幕亮度滑条），**右键**是完整菜单（额度详情、屏幕切换、更换桌宠、音乐/网速页等）。
 
 ## 常见问题
 
