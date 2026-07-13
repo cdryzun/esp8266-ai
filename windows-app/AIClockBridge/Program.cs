@@ -37,7 +37,7 @@ static class Program
             {
                 ["/"] = () => service.Snapshot().ToJson(),
                 ["/status"] = () => service.Snapshot().ToJson(),
-                ["/net"] = () => netMonitor.ToJson(),
+                ["/net"] = () => netMonitor.ToJson(SystemStatsMonitor.Snapshot()),
                 ["/music"] = () => nowPlaying.ToJson(),
             },
             binaryRoutes: new()

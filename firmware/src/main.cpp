@@ -95,6 +95,9 @@ long netQRx[NET_QUEUE], netQTx[NET_QUEUE]; // ring buffer of pending samples
 int netQHead = 0, netQCount = 0;
 long netSeq = -1;                          // last bridge sample seq consumed into the queue
 long netCurRx = 0, netCurTx = 0;           // smoothed readout for the header
+int netCpuPct = -1, netMemPct = -1;        // Mac CPU/MEM row; -1 = bridge sends none (hidden)
+String netLastCpuVal, netLastMemVal;       // change detection for the CPU/MEM values
+bool netSysLabelsDrawn = false;
 unsigned long lastNetPollMs = 0;
 unsigned long lastNetDrawMs = 0;
 bool netChromeDrawn = false;
@@ -652,21 +655,20 @@ void resetNetChart() {
   netLastDl = "";
   netLastUl = "";
   netLastScaleText = "";
+  netLastCpuVal = "";
+  netLastMemVal = "";
+  netSysLabelsDrawn = false;
   netQHead = 0;
   netQCount = 0;
   netSeq = -1;
 }
 
-// Full-scale steps: whole-chart shared scale snaps to the next "nice" value,
-// so bar heights stay comparable and the axis label reads cleanly.
-long niceNetScale(long maxV) {
-  static const long steps[] = {10240,    20480,    51200,     102400,    204800,    512000,
-                               1048576,  2097152,  5242880,   10485760,  20971520,  52428800,
-                               104857600, 209715200, 524288000};
-  for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
-    if (maxV <= steps[i]) return steps[i];
-  }
-  return steps[sizeof(steps) / sizeof(steps[0]) - 1];
+// Adaptive full scale: the window's peak always lands at ~87% of the chart
+// height, so the undulation stays visible no matter the absolute speed.
+// (The old 1/2/5 stepped scale could squash everything to under half height.)
+long adaptiveNetScale(long maxV) {
+  long s = maxV + maxV / 7; // ~1.15x headroom above the peak
+  return s > 10240 ? s : 10240;
 }
 
 // Static chrome: labels that never change while in net mode.
@@ -677,7 +679,46 @@ void drawNetChrome() {
   tft.drawString("DOWN", 14, 10, 1);
   tft.drawString("UP", 134, 10, 1);
   tft.setTextDatum(TC_DATUM);
-  tft.drawString("MAC NET  -  56s", SCREEN_CX, 208, 1);
+  tft.drawString("MAC NET  -  56s", SCREEN_CX, 226, 1); // below the CPU/MEM row
+}
+
+// Mac CPU / memory usage row between the chart and the footer: small grey
+// labels at fixed positions, big font-4 values left-aligned at fixed x so a
+// width change (5% -> 30%) never shifts the rest of the row around.
+// Hidden only if an old bridge doesn't send the fields yet.
+const int NET_SYS_Y = 192;                          // row top (26px tall, font 4)
+const int NET_CPU_LABEL_X = 28, NET_CPU_VAL_X = 62; // value region 62..126 ("100%" = 63px)
+const int NET_MEM_LABEL_X = 130, NET_MEM_VAL_X = 164;
+
+void drawNetSysinfoIfChanged() {
+  if (netCpuPct < 0) {
+    if (netSysLabelsDrawn) { // bridge stopped sending: erase the whole row
+      tft.fillRect(0, NET_SYS_Y, SCREEN_W, 26, TFT_BLACK);
+      netSysLabelsDrawn = false;
+      netLastCpuVal = "";
+      netLastMemVal = "";
+    }
+    return;
+  }
+  tft.setTextDatum(TL_DATUM);
+  if (!netSysLabelsDrawn) {
+    netSysLabelsDrawn = true;
+    tft.setTextColor(0x7BEF, TFT_BLACK);
+    tft.drawString("CPU", NET_CPU_LABEL_X, NET_SYS_Y + 6, 2);
+    tft.drawString("MEM", NET_MEM_LABEL_X, NET_SYS_Y + 6, 2);
+  }
+  String c = String(netCpuPct) + "%", m = String(netMemPct) + "%";
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (c != netLastCpuVal) {
+    netLastCpuVal = c;
+    tft.fillRect(NET_CPU_VAL_X, NET_SYS_Y, 64, 26, TFT_BLACK);
+    tft.drawString(c, NET_CPU_VAL_X, NET_SYS_Y, 4);
+  }
+  if (m != netLastMemVal) {
+    netLastMemVal = m;
+    tft.fillRect(NET_MEM_VAL_X, NET_SYS_Y, 64, 26, TFT_BLACK);
+    tft.drawString(m, NET_MEM_VAL_X, NET_SYS_Y, 4);
+  }
 }
 
 // Header readouts (1s-averaged), each repainted only when its text changes.
@@ -715,7 +756,7 @@ void drawNetChart() {
     if (netHistRx[i] > maxV) maxV = netHistRx[i];
     if (netHistTx[i] > maxV) maxV = netHistTx[i];
   }
-  netScale = niceNetScale(maxV);
+  netScale = adaptiveNetScale(maxV);
 
   // Per-column heights (3-tap smoothed), then per-column line "bands": each
   // band spans from the previous column's height to this one's, so steep
@@ -725,7 +766,9 @@ void drawNetChart() {
   static uint8_t hRx[NET_CHART_W], hTx[NET_CHART_W];
   static uint8_t dlLo[NET_CHART_W], dlHi[NET_CHART_W]; // DL edge band, incl. 3px weight
   static uint8_t ulLo[NET_CHART_W], ulHi[NET_CHART_W]; // UL line band
-  const int LINE_T = 3; // stroke thickness in px
+  // The panel is physically tiny (2.7cm across), so the stroke must be much
+  // thicker than the Mac mirror's to read at the same visual weight.
+  const int LINE_T = 10; // stroke thickness in px
   for (int i = 0; i < NET_CHART_W; i++) {
     int lo = i > 0 ? i - 1 : 0, hi = i < NET_CHART_W - 1 ? i + 1 : NET_CHART_W - 1;
     long rx = (netHistRx[lo] + netHistRx[i] + netHistRx[hi]) / 3;
@@ -782,6 +825,7 @@ void netDrawTick() {
   }
   if (netHeaderDirty) {
     drawNetHeaderIfChanged();
+    drawNetSysinfoIfChanged();
     netHeaderDirty = false;
   }
   if (netQCount == 0) return;
@@ -812,6 +856,8 @@ void pollNet() {
     if (!deserializeJson(doc, http.getString())) {
       netCurRx = doc["rx_bps"] | 0L;
       netCurTx = doc["tx_bps"] | 0L;
+      netCpuPct = doc["cpu_pct"] | -1;
+      netMemPct = doc["mem_pct"] | -1;
       netHeaderDirty = true;
       long seq = doc["seq"] | -1L;
       JsonArray rx = doc["rx"], tx = doc["tx"];

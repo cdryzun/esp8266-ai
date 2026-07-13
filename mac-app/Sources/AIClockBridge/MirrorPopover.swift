@@ -82,6 +82,8 @@ final class MirrorView: NSView {
     // one column per 250ms sample, 224-column (56s) window, shared "nice"
     // full-scale, dim-green download area + yellow upload line.
     var netMode = false
+    var netCPU = -1 // -1 = hidden (CPU/MEM row disabled in the menu)
+    var netMem = -1
     var netHeaderDL = "0B"
     var netHeaderUL = "0B"
     private static let netCols = 224 // NET_CHART_W
@@ -101,13 +103,11 @@ final class MirrorView: NSView {
         needsDisplay = true
     }
 
-    /// Firmware's niceNetScale: shared whole-chart scale snapped to 1/2/5 steps.
-    private static func niceNetScale(_ maxV: Double) -> Double {
-        let steps: [Double] = [10_240, 20_480, 51_200, 102_400, 204_800, 512_000,
-                               1_048_576, 2_097_152, 5_242_880, 10_485_760, 20_971_520,
-                               52_428_800, 104_857_600, 209_715_200, 524_288_000]
-        return steps.first { maxV <= $0 } ?? steps[steps.count - 1]
+    /// Firmware's adaptiveNetScale: the window peak sits at ~87% of the chart.
+    private static func adaptiveNetScale(_ maxV: Double) -> Double {
+        max(maxV * 1.15, 10240)
     }
+
     var musicMode = false
     var musicTitle = ""
     var musicArtist = ""
@@ -287,7 +287,7 @@ final class MirrorView: NSView {
         ])
 
         let cx: CGFloat = 8, cy: CGFloat = 60, cw: CGFloat = 224, ch: CGFloat = 128
-        let scale = Self.niceNetScale(max(histRx.max() ?? 0, histTx.max() ?? 0))
+        let scale = Self.adaptiveNetScale(max(histRx.max() ?? 0, histTx.max() ?? 0))
 
         // quarter gridlines
         ctx.setStrokeColor(NSColor(white: 0.16, alpha: 1).cgColor)
@@ -320,6 +320,8 @@ final class MirrorView: NSView {
         ctx.setFillColor(NSColor(calibratedRed: 0, green: 0.33, blue: 0, alpha: 1).cgColor)
         ctx.fillPath()
         ctx.restoreGState()
+        // NOT the firmware's LINE_T: the popover is ~4x the panel's physical
+        // size, so a thin stroke here matches the device's thick one visually.
         ctx.setStrokeColor(green.cgColor)
         ctx.setLineWidth(3)
         ctx.setLineJoin(.round)
@@ -328,7 +330,7 @@ final class MirrorView: NSView {
         for p in dl.dropFirst() { ctx.addLine(to: p) }
         ctx.strokePath()
 
-        // upload: 2px yellow line
+        // upload: yellow line
         let ul = points(histTx)
         ctx.setStrokeColor(yellow.cgColor)
         ctx.setLineWidth(3)
@@ -346,8 +348,26 @@ final class MirrorView: NSView {
             ])
         let center = NSMutableParagraphStyle()
         center.alignment = .center
+        if netCPU >= 0 {
+            // fixed-x label + value columns, so a value width change (5% ->
+            // 30%) never shifts the rest of the row (matches the firmware)
+            let sysLabelFont = NSFont.monospacedSystemFont(ofSize: 9, weight: .medium)
+            let sysValueFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .bold)
+            ("CPU" as NSString).draw(at: NSPoint(x: 28, y: 196), withAttributes: [
+                .font: sysLabelFont, .foregroundColor: grey,
+            ])
+            ("\(netCPU)%" as NSString).draw(at: NSPoint(x: 62, y: 190), withAttributes: [
+                .font: sysValueFont, .foregroundColor: NSColor.white,
+            ])
+            ("MEM" as NSString).draw(at: NSPoint(x: 130, y: 196), withAttributes: [
+                .font: sysLabelFont, .foregroundColor: grey,
+            ])
+            ("\(netMem)%" as NSString).draw(at: NSPoint(x: 164, y: 190), withAttributes: [
+                .font: sysValueFont, .foregroundColor: NSColor.white,
+            ])
+        }
         ("MAC NET  -  56s" as NSString).draw(
-            in: NSRect(x: 0, y: 206, width: 240, height: 12), withAttributes: [
+            in: NSRect(x: 0, y: 212, width: 240, height: 12), withAttributes: [
                 .font: labelFont, .foregroundColor: grey, .paragraphStyle: center,
             ])
     }
@@ -506,6 +526,9 @@ final class MirrorPopoverController: NSObject, NSPopoverDelegate {
         let smoothed = netMonitor.currentSmoothed
         mirror.netHeaderDL = MirrorView.deviceSpeedText(smoothed.rx)
         mirror.netHeaderUL = MirrorView.deviceSpeedText(smoothed.tx)
+        let stats = SystemStatsMonitor.shared.snapshot() // internally 1s-cached
+        mirror.netCPU = stats.cpu
+        mirror.netMem = stats.mem
         mirror.pushNetSample(rx: cur.rx, tx: cur.tx)
     }
 

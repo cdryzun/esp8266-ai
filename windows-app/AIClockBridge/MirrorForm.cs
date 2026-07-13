@@ -32,6 +32,8 @@ sealed class MirrorControl : Control
     // one column per 250ms sample, 224-column (56s) window, shared "nice"
     // full-scale, dim-green download area + yellow upload line.
     public bool NetMode;
+    public int NetCPU = -1; // -1 = hidden (CPU/MEM row disabled in the menu)
+    public int NetMem = -1;
     public string NetHeaderDL = "0B";
     public string NetHeaderUL = "0B";
     const int NetCols = 224; // NET_CHART_W
@@ -84,15 +86,8 @@ sealed class MirrorControl : Control
         Invalidate();
     }
 
-    /// Firmware's niceNetScale: shared whole-chart scale snapped to 1/2/5 steps.
-    static double NiceNetScale(double maxV)
-    {
-        double[] steps = { 10_240, 20_480, 51_200, 102_400, 204_800, 512_000,
-                           1_048_576, 2_097_152, 5_242_880, 10_485_760, 20_971_520,
-                           52_428_800, 104_857_600, 209_715_200, 524_288_000 };
-        foreach (var s in steps) if (maxV <= s) return s;
-        return steps[^1];
-    }
+    /// Firmware's adaptiveNetScale: the window peak sits at ~87% of the chart.
+    static double AdaptiveNetScale(double maxV) => Math.Max(maxV * 1.15, 10240);
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -246,7 +241,7 @@ sealed class MirrorControl : Control
         }
 
         const float cx = 8, cy = 60, cw = 224, ch = 128;
-        var scale = NiceNetScale(Math.Max(_histRx.Max(), _histTx.Max()));
+        var scale = AdaptiveNetScale(Math.Max(_histRx.Max(), _histTx.Max()));
 
         // quarter gridlines
         using (var grid = new Pen(Color.FromArgb(41, 41, 41), 1))
@@ -284,6 +279,8 @@ sealed class MirrorControl : Control
             using var fill = new SolidBrush(Color.FromArgb(0, 84, 0));
             g.FillPath(fill, path);
         }
+        // NOT the firmware's LINE_T: the mirror window is ~4x the panel's
+        // physical size, so a thin stroke here matches the device visually.
         using (var pen = new Pen(Green, 3) { LineJoin = LineJoin.Round })
         {
             g.DrawLines(pen, dl);
@@ -304,8 +301,19 @@ sealed class MirrorControl : Control
         }
         using (var center = new StringFormat { Alignment = StringAlignment.Center })
         {
+            if (NetCPU >= 0)
+            {
+                // fixed-x label + value columns, so a value width change (5%
+                // -> 30%) never shifts the rest of the row (matches firmware)
+                using var sysLabelFont = new Font("Consolas", 7f);
+                using var sysValueFont = new Font("Consolas", 11.5f, FontStyle.Bold);
+                g.DrawString("CPU", sysLabelFont, greyBrush, 28, 196);
+                g.DrawString($"{NetCPU}%", sysValueFont, Brushes.White, 62, 189);
+                g.DrawString("MEM", sysLabelFont, greyBrush, 130, 196);
+                g.DrawString($"{NetMem}%", sysValueFont, Brushes.White, 164, 189);
+            }
             g.DrawString("PC NET  -  56s", labelFont, greyBrush,
-                         new RectangleF(0, 206, 240, 12), center);
+                         new RectangleF(0, 212, 240, 12), center);
         }
     }
 
@@ -515,6 +523,9 @@ sealed class MirrorForm : Form
         var smoothed = _netMonitor.CurrentSmoothed;
         _mirror.NetHeaderDL = MirrorControl.DeviceSpeedText(smoothed.Rx);
         _mirror.NetHeaderUL = MirrorControl.DeviceSpeedText(smoothed.Tx);
+        var (cpu, mem) = SystemStatsMonitor.Snapshot(); // internally 1s-cached
+        _mirror.NetCPU = cpu;
+        _mirror.NetMem = mem;
         _mirror.PushNetSample(cur.Rx, cur.Tx);
     }
 
